@@ -1,0 +1,670 @@
+/**
+ * 酒馆使用追踪器 (Tavern Usage Tracker)
+ * 功能：
+ *  - 统计每天使用酒馆的时长（PC端 / 移动端分开）
+ *  - 统计每天输入的字数（PC端 / 移动端分开）
+ *  - 常驻悬浮按钮，实时显示今日时长，点击查看详细统计
+ *  - 最近7天柱状图可视化 + 详细表格
+ *  - 累计统计
+ *  - 空闲自动暂停（默认5分钟无操作不计时）
+ *  - 页面最小化 / 切后台自动暂停
+ */
+
+const MODULE_NAME = 'tavern_usage_tracker';
+const MODULE_DISPLAY_NAME = '酒馆使用追踪器';
+
+// ========== 默认设置 ==========
+const defaultSettings = Object.freeze({
+    daily: {},            // { "YYYY-MM-DD": { pc: {duration, chars}, mobile: {duration, chars} } }
+    idleTimeout: 300,     // 空闲超时（秒），超过则暂停计时，默认5分钟
+    enabled: true,
+    floatingButtonEnabled: true,   // 是否显示悬浮按钮
+    floatingButtonPosition: null,  // {x, y} 拖动后的位置，null=默认右下角
+});
+
+// ========== 运行时状态 ==========
+const state = {
+    isActive: false,
+    lastActivityTime: Date.now(),
+    sessionStart: null,
+    deviceType: 'pc',
+    timerInterval: null,
+    saveInterval: null,
+    floatBtn: null,           // 悬浮按钮 DOM
+    floatBtnUpdateTimer: null, // 悬浮按钮更新定时器
+    isDragging: false,
+    dragStartX: 0,
+    dragStartY: 0,
+    dragOrigX: 0,
+    dragOrigY: 0,
+    dragMoved: false,
+    currentPopup: null,       // 当前打开的弹窗实例
+    popupUpdateTimer: null,   // 弹窗实时更新定时器
+};
+
+// ========== 获取 SillyTavern 上下文 ==========
+const ctx = SillyTavern.getContext();
+const {
+    eventSource,
+    event_types,
+    extensionSettings,
+    saveSettingsDebounced,
+    SlashCommandParser,
+    SlashCommand,
+    Popup,
+    POPUP_TYPE,
+} = ctx;
+
+// ========== 设置管理 ==========
+function getSettings() {
+    if (!extensionSettings[MODULE_NAME]) {
+        extensionSettings[MODULE_NAME] = structuredClone(defaultSettings);
+    }
+    for (const key of Object.keys(defaultSettings)) {
+        if (!Object.hasOwn(extensionSettings[MODULE_NAME], key)) {
+            extensionSettings[MODULE_NAME][key] = defaultSettings[key];
+        }
+    }
+    return extensionSettings[MODULE_NAME];
+}
+
+// ========== 设备检测 ==========
+function detectDeviceType() {
+    const ua = navigator.userAgent || '';
+    const mobileUA = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile|HarmonyOS|XiaoMi|MiuiBrowser/i.test(ua);
+    const isTouchNarrow = ('ontouchstart' in window || navigator.maxTouchPoints > 0) && window.innerWidth < 820;
+    return (mobileUA || isTouchNarrow) ? 'mobile' : 'pc';
+}
+
+// ========== 日期工具 ==========
+function getTodayKey() {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+
+function getDateKey(date) {
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function ensureTodayRecord() {
+    const settings = getSettings();
+    const today = getTodayKey();
+    if (!settings.daily[today]) {
+        settings.daily[today] = {
+            pc: { duration: 0, chars: 0 },
+            mobile: { duration: 0, chars: 0 },
+        };
+    }
+    return settings.daily[today];
+}
+
+// ========== 活动检测 ==========
+function recordActivity() {
+    state.lastActivityTime = Date.now();
+    if (!state.isActive) {
+        state.isActive = true;
+        state.sessionStart = Date.now();
+    }
+}
+
+function isIdle() {
+    const settings = getSettings();
+    const idleMs = (settings.idleTimeout || 300) * 1000;
+    return (Date.now() - state.lastActivityTime) > idleMs;
+}
+
+function isPageActive() {
+    return document.visibilityState === 'visible' && document.hasFocus();
+}
+
+// ========== 每秒计时回调 ==========
+function tick() {
+    if (!state.isActive) return;
+    if (isIdle() || !isPageActive()) {
+        state.isActive = false;
+        state.sessionStart = null;
+        saveSettingsDebounced();
+        return;
+    }
+    const record = ensureTodayRecord();
+    record[state.deviceType].duration += 1;
+}
+
+// ========== 输入字数统计 ==========
+function handleMessageSent(data) {
+    let message = null;
+    if (data && typeof data === 'object') {
+        if (data.message && typeof data.message === 'object') {
+            message = data.message;
+        } else if (typeof data.mes === 'string') {
+            message = data;
+        }
+    }
+    if (!message) return;
+    const text = message.mes || '';
+    const charCount = text.length;
+    if (charCount > 0) {
+        const record = ensureTodayRecord();
+        record[state.deviceType].chars += charCount;
+        saveSettingsDebounced();
+    }
+}
+
+// ========== 格式化工具 ==========
+function formatDuration(seconds) {
+    seconds = Math.floor(seconds || 0);
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    if (h > 0) return `${h}小时${m}分`;
+    if (m > 0) return `${m}分${s}秒`;
+    return `${s}秒`;
+}
+
+// 悬浮按钮用的简洁格式
+function formatDurationShort(seconds) {
+    seconds = Math.floor(seconds || 0);
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    if (h > 0) return `${h}h${m}m`;
+    if (m > 0) return `${m}m`;
+    return `${seconds}s`;
+}
+
+function formatNumber(n) {
+    return Math.floor(n || 0).toLocaleString('zh-CN');
+}
+
+// 获取最近7天数据（复用）
+function getRecentDays() {
+    const settings = getSettings();
+    const today = getTodayKey();
+    const days = [];
+    for (let i = 6; i >= 0; i--) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        const key = getDateKey(d);
+        const data = settings.daily[key] || { pc: { duration: 0, chars: 0 }, mobile: { duration: 0, chars: 0 } };
+        days.push({
+            key,
+            label: `${d.getMonth() + 1}/${d.getDate()}`,
+            weekday: ['日','一','二','三','四','五','六'][d.getDay()],
+            isToday: key === today,
+            pc: data.pc,
+            mobile: data.mobile,
+            totalDuration: data.pc.duration + data.mobile.duration,
+            totalChars: data.pc.chars + data.mobile.chars,
+        });
+    }
+    return days;
+}
+
+// ========== 生成柱状图 HTML ==========
+function generateBarChartHTML(days) {
+    const maxDuration = Math.max(...days.map(d => d.totalDuration), 1);
+    const chartHeight = 140; // 柱状图区域高度 px
+
+    let barsHTML = '';
+    for (const day of days) {
+        const totalPct = (day.totalDuration / maxDuration) * 100;
+        const pcPct = day.totalDuration > 0 ? (day.pc.duration / day.totalDuration) * 100 : 0;
+        const mobilePct = 100 - pcPct;
+
+        const tooltip = `${day.label} 周${day.weekday}\nPC: ${formatDuration(day.pc.duration)} / ${formatNumber(day.pc.chars)}字\n移动端: ${formatDuration(day.mobile.duration)} / ${formatNumber(day.mobile.chars)}字\n合计: ${formatDuration(day.totalDuration)} / ${formatNumber(day.totalChars)}字`;
+
+        barsHTML += `
+        <div class="tut-bar-col ${day.isToday ? 'tut-bar-today' : ''}" title="${tooltip}">
+            <div class="tut-bar-value">${day.totalDuration > 0 ? formatDurationShort(day.totalDuration) : ''}</div>
+            <div class="tut-bar-track" style="height: ${chartHeight}px;">
+                <div class="tut-bar-fill" style="height: ${totalPct}%;">
+                    <div class="tut-bar-pc" style="height: ${pcPct}%;" title="PC: ${formatDuration(day.pc.duration)}"></div>
+                    <div class="tut-bar-mobile" style="height: ${mobilePct}%;" title="移动端: ${formatDuration(day.mobile.duration)}"></div>
+                </div>
+            </div>
+            <div class="tut-bar-label">${day.label}</div>
+            <div class="tut-bar-weekday">周${day.weekday}</div>
+        </div>`;
+    }
+
+    return `
+    <div class="tut-chart">
+        <div class="tut-chart-legend">
+            <span class="tut-legend-item"><span class="tut-legend-dot tut-legend-pc"></span>PC端</span>
+            <span class="tut-legend-item"><span class="tut-legend-dot tut-legend-mobile"></span>移动端</span>
+        </div>
+        <div class="tut-bars">
+            ${barsHTML}
+        </div>
+    </div>`;
+}
+
+// ========== 生成统计 HTML ==========
+function generateStatsHTML() {
+    const settings = getSettings();
+    const today = getTodayKey();
+    const todayData = settings.daily[today] || { pc: { duration: 0, chars: 0 }, mobile: { duration: 0, chars: 0 } };
+    const days = getRecentDays();
+
+    // 累计统计
+    let totalAllDuration = 0;
+    let totalAllChars = 0;
+    let activeDays = 0;
+    for (const key of Object.keys(settings.daily)) {
+        const d = settings.daily[key];
+        const dayDuration = d.pc.duration + d.mobile.duration;
+        const dayChars = d.pc.chars + d.mobile.chars;
+        totalAllDuration += dayDuration;
+        totalAllChars += dayChars;
+        if (dayDuration > 0 || dayChars > 0) activeDays++;
+    }
+
+    const sessionText = state.isActive && state.sessionStart
+        ? `🟢 本次会话已持续 ${formatDuration(Math.floor((Date.now() - state.sessionStart) / 1000))}`
+        : '⚪ 当前未在活跃使用中';
+
+    let html = `
+<div class="tut-stats">
+  <div class="tut-header">
+    <span class="tut-device-badge ${state.deviceType}">
+      ${state.deviceType === 'mobile' ? '📱 移动端' : '💻 PC端'}
+    </span>
+    <span class="tut-session">${sessionText}</span>
+  </div>
+
+  <h3>📊 今日统计 (${today})</h3>
+  <div class="tut-today">
+    <div class="tut-card">
+      <div class="tut-card-title">💻 PC端</div>
+      <div class="tut-card-value">${formatDuration(todayData.pc.duration)}</div>
+      <div class="tut-card-sub">输入 ${formatNumber(todayData.pc.chars)} 字</div>
+    </div>
+    <div class="tut-card">
+      <div class="tut-card-title">📱 移动端</div>
+      <div class="tut-card-value">${formatDuration(todayData.mobile.duration)}</div>
+      <div class="tut-card-sub">输入 ${formatNumber(todayData.mobile.chars)} 字</div>
+    </div>
+    <div class="tut-card tut-card-total">
+      <div class="tut-card-title">📈 合计</div>
+      <div class="tut-card-value">${formatDuration(todayData.pc.duration + todayData.mobile.duration)}</div>
+      <div class="tut-card-sub">输入 ${formatNumber(todayData.pc.chars + todayData.mobile.chars)} 字</div>
+    </div>
+  </div>
+
+  <h3>📈 最近7天时长趋势</h3>
+  ${generateBarChartHTML(days)}
+
+  <h3>📅 最近7天明细</h3>
+  <div class="tut-table-wrap">
+    <table class="tut-table">
+      <thead>
+        <tr>
+          <th>日期</th>
+          <th>PC时长</th>
+          <th>PC字数</th>
+          <th>移动时长</th>
+          <th>移动字数</th>
+          <th>总时长</th>
+          <th>总字数</th>
+        </tr>
+      </thead>
+      <tbody>
+`;
+
+    for (const day of days) {
+        html += `<tr class="${day.isToday ? 'tut-row-today' : ''}">
+          <td>${day.label}${day.isToday ? ' <span class="tut-today-tag">今天</span>' : ''}</td>
+          <td>${formatDuration(day.pc.duration)}</td>
+          <td>${formatNumber(day.pc.chars)}</td>
+          <td>${formatDuration(day.mobile.duration)}</td>
+          <td>${formatNumber(day.mobile.chars)}</td>
+          <td class="tut-bold">${formatDuration(day.totalDuration)}</td>
+          <td class="tut-bold">${formatNumber(day.totalChars)}</td>
+        </tr>`;
+    }
+
+    html += `
+      </tbody>
+    </table>
+  </div>
+
+  <h3>🏆 累计统计</h3>
+  <div class="tut-total-row">
+    <div class="tut-total-item">
+      <div class="tut-total-label">总使用时长</div>
+      <div class="tut-total-value">${formatDuration(totalAllDuration)}</div>
+    </div>
+    <div class="tut-total-item">
+      <div class="tut-total-label">总输入字数</div>
+      <div class="tut-total-value">${formatNumber(totalAllChars)}</div>
+    </div>
+    <div class="tut-total-item">
+      <div class="tut-total-label">活跃天数</div>
+      <div class="tut-total-value">${activeDays} 天</div>
+    </div>
+  </div>
+
+  <div class="tut-footer">
+    <p>💡 计时规则：页面活跃且有操作时计时；切后台、最小化、或 ${settings.idleTimeout / 60} 分钟无操作自动暂停。</p>
+    <p>💡 输入字数按发送的消息统计，编辑/删除不计入。悬浮按钮可拖动，点击查看详细统计。</p>
+  </div>
+</div>
+`;
+    return html;
+}
+
+// ========== 悬浮按钮 ==========
+function createFloatingButton() {
+    const settings = getSettings();
+    if (!settings.floatingButtonEnabled) return;
+
+    // 避免重复创建
+    if (document.getElementById('tut-float-btn')) {
+        state.floatBtn = document.getElementById('tut-float-btn');
+        return;
+    }
+
+    const btn = document.createElement('div');
+    btn.id = 'tut-float-btn';
+    btn.className = 'tut-float-btn';
+    btn.innerHTML = `
+        <div class="tut-float-icon">🍺</div>
+        <div class="tut-float-text">
+            <div class="tut-float-label">今日</div>
+            <div class="tut-float-duration">0s</div>
+        </div>
+    `;
+
+    // 设置位置
+    const pos = settings.floatingButtonPosition;
+    if (pos && typeof pos.x === 'number' && typeof pos.y === 'number') {
+        btn.style.left = pos.x + 'px';
+        btn.style.top = pos.y + 'px';
+        btn.style.right = 'auto';
+        btn.style.bottom = 'auto';
+    }
+
+    document.body.appendChild(btn);
+    state.floatBtn = btn;
+
+    // 点击事件（与拖动区分）
+    btn.addEventListener('click', (e) => {
+        if (state.dragMoved) {
+            state.dragMoved = false;
+            return;
+        }
+        showStatsPopup();
+    });
+
+    // 拖动支持
+    btn.addEventListener('mousedown', startDrag);
+    btn.addEventListener('touchstart', startDragTouch, { passive: false });
+
+    // 启动更新定时器
+    updateFloatButtonText();
+    if (state.floatBtnUpdateTimer) clearInterval(state.floatBtnUpdateTimer);
+    state.floatBtnUpdateTimer = setInterval(updateFloatButtonText, 3000);
+}
+
+function updateFloatButtonText() {
+    if (!state.floatBtn) return;
+    const settings = getSettings();
+    const today = getTodayKey();
+    const data = settings.daily[today] || { pc: { duration: 0 }, mobile: { duration: 0 } };
+    const total = data.pc.duration + data.mobile.duration;
+    const durationEl = state.floatBtn.querySelector('.tut-float-duration');
+    if (durationEl) {
+        durationEl.textContent = formatDurationShort(total);
+    }
+    // 活跃状态指示
+    if (state.isActive) {
+        state.floatBtn.classList.add('tut-float-active');
+    } else {
+        state.floatBtn.classList.remove('tut-float-active');
+    }
+}
+
+// 桌面端拖动
+function startDrag(e) {
+    state.isDragging = true;
+    state.dragMoved = false;
+    state.dragStartX = e.clientX;
+    state.dragStartY = e.clientY;
+    const rect = state.floatBtn.getBoundingClientRect();
+    state.dragOrigX = rect.left;
+    state.dragOrigY = rect.top;
+    state.floatBtn.style.right = 'auto';
+    state.floatBtn.style.bottom = 'auto';
+    state.floatBtn.classList.add('tut-float-dragging');
+    document.addEventListener('mousemove', onDrag);
+    document.addEventListener('mouseup', endDrag);
+    e.preventDefault();
+}
+
+function onDrag(e) {
+    if (!state.isDragging) return;
+    const dx = e.clientX - state.dragStartX;
+    const dy = e.clientY - state.dragStartY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+        state.dragMoved = true;
+    }
+    let newX = state.dragOrigX + dx;
+    let newY = state.dragOrigY + dy;
+    // 边界限制
+    newX = Math.max(0, Math.min(window.innerWidth - state.floatBtn.offsetWidth, newX));
+    newY = Math.max(0, Math.min(window.innerHeight - state.floatBtn.offsetHeight, newY));
+    state.floatBtn.style.left = newX + 'px';
+    state.floatBtn.style.top = newY + 'px';
+}
+
+function endDrag() {
+    if (!state.isDragging) return;
+    state.isDragging = false;
+    state.floatBtn.classList.remove('tut-float-dragging');
+    document.removeEventListener('mousemove', onDrag);
+    document.removeEventListener('mouseup', endDrag);
+    // 保存位置
+    if (state.dragMoved) {
+        const settings = getSettings();
+        const rect = state.floatBtn.getBoundingClientRect();
+        settings.floatingButtonPosition = { x: rect.left, y: rect.top };
+        saveSettingsDebounced();
+    }
+}
+
+// 移动端拖动
+function startDragTouch(e) {
+    if (e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    state.isDragging = true;
+    state.dragMoved = false;
+    state.dragStartX = touch.clientX;
+    state.dragStartY = touch.clientY;
+    const rect = state.floatBtn.getBoundingClientRect();
+    state.dragOrigX = rect.left;
+    state.dragOrigY = rect.top;
+    state.floatBtn.style.right = 'auto';
+    state.floatBtn.style.bottom = 'auto';
+    state.floatBtn.classList.add('tut-float-dragging');
+    document.addEventListener('touchmove', onDragTouch, { passive: false });
+    document.addEventListener('touchend', endDragTouch);
+    e.preventDefault();
+}
+
+function onDragTouch(e) {
+    if (!state.isDragging || e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    const dx = touch.clientX - state.dragStartX;
+    const dy = touch.clientY - state.dragStartY;
+    if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
+        state.dragMoved = true;
+    }
+    let newX = state.dragOrigX + dx;
+    let newY = state.dragOrigY + dy;
+    newX = Math.max(0, Math.min(window.innerWidth - state.floatBtn.offsetWidth, newX));
+    newY = Math.max(0, Math.min(window.innerHeight - state.floatBtn.offsetHeight, newY));
+    state.floatBtn.style.left = newX + 'px';
+    state.floatBtn.style.top = newY + 'px';
+    e.preventDefault();
+}
+
+function endDragTouch() {
+    if (!state.isDragging) return;
+    state.isDragging = false;
+    state.floatBtn.classList.remove('tut-float-dragging');
+    document.removeEventListener('touchmove', onDragTouch);
+    document.removeEventListener('touchend', endDragTouch);
+    if (state.dragMoved) {
+        const settings = getSettings();
+        const rect = state.floatBtn.getBoundingClientRect();
+        settings.floatingButtonPosition = { x: rect.left, y: rect.top };
+        saveSettingsDebounced();
+    }
+}
+
+// ========== 显示统计弹窗 ==========
+async function showStatsPopup() {
+    // 如果已有弹窗，先关闭
+    if (state.currentPopup) {
+        try { state.currentPopup.hide(); } catch (e) { /* ignore */ }
+        state.currentPopup = null;
+    }
+    if (state.popupUpdateTimer) {
+        clearInterval(state.popupUpdateTimer);
+        state.popupUpdateTimer = null;
+    }
+
+    // Popup 构造函数是位置参数：(content, type, inputValue, options)
+    const popup = new Popup(
+        generateStatsHTML(),
+        POPUP_TYPE.TEXT,
+        '',
+        {
+            allowVerticalScrolling: true,
+            wide: true,
+            onClose: () => {
+                if (state.popupUpdateTimer) {
+                    clearInterval(state.popupUpdateTimer);
+                    state.popupUpdateTimer = null;
+                }
+                state.currentPopup = null;
+            },
+        }
+    );
+    state.currentPopup = popup;
+    await popup.show();
+
+    // 弹窗打开时每5秒刷新内容（通过 popup.content 直接更新）
+    state.popupUpdateTimer = setInterval(() => {
+        if (popup && popup.content && popup.content.isConnected) {
+            popup.content.innerHTML = generateStatsHTML();
+        }
+    }, 5000);
+}
+
+// ========== 注册斜杠命令 ==========
+function registerSlashCommands() {
+    try {
+        SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+            name: 'usage',
+            callback: () => {
+                showStatsPopup();
+                return '已打开使用统计面板';
+            },
+            aliases: ['统计', '使用时长', 'usage-tracker'],
+            returns: '打开使用统计面板',
+            helpString: '<div>显示酒馆使用时长和输入字数统计（PC端 / 移动端分开计算），也可点击右下角悬浮按钮查看</div>',
+        }));
+    } catch (e) {
+        console.warn(`[${MODULE_DISPLAY_NAME}] 斜杠命令注册失败:`, e);
+    }
+}
+
+// ========== 事件监听 ==========
+function initEventListeners() {
+    eventSource.on(event_types.MESSAGE_SENT, handleMessageSent);
+
+    const activityEvents = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click', 'wheel'];
+    for (const evt of activityEvents) {
+        document.addEventListener(evt, recordActivity, { passive: true });
+    }
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+            recordActivity();
+        } else {
+            state.isActive = false;
+            state.sessionStart = null;
+            saveSettingsDebounced();
+        }
+    });
+
+    window.addEventListener('blur', () => {
+        state.isActive = false;
+        state.sessionStart = null;
+        saveSettingsDebounced();
+    });
+    window.addEventListener('focus', () => {
+        recordActivity();
+    });
+
+    window.addEventListener('beforeunload', () => {
+        try { saveSettingsDebounced(); } catch (e) { /* ignore */ }
+    });
+
+    // 窗口大小变化时，确保悬浮按钮在可视区域内
+    window.addEventListener('resize', () => {
+        if (!state.floatBtn) return;
+        const rect = state.floatBtn.getBoundingClientRect();
+        let changed = false;
+        let newX = rect.left, newY = rect.top;
+        if (rect.right > window.innerWidth) { newX = window.innerWidth - state.floatBtn.offsetWidth; changed = true; }
+        if (rect.bottom > window.innerHeight) { newY = window.innerHeight - state.floatBtn.offsetHeight; changed = true; }
+        if (changed) {
+            state.floatBtn.style.left = Math.max(0, newX) + 'px';
+            state.floatBtn.style.top = Math.max(0, newY) + 'px';
+        }
+    });
+
+    setInterval(() => {
+        ensureTodayRecord();
+    }, 60000);
+}
+
+// ========== 启动计时器 ==========
+function startTimers() {
+    state.timerInterval = setInterval(tick, 1000);
+    state.saveInterval = setInterval(() => {
+        saveSettingsDebounced();
+    }, 30000);
+}
+
+// ========== 生命周期钩子 ==========
+export async function onActivate() {
+    console.log(`[${MODULE_DISPLAY_NAME}] 扩展已激活`);
+
+    getSettings();
+    state.deviceType = detectDeviceType();
+    state.lastActivityTime = Date.now();
+    state.isActive = true;
+    state.sessionStart = Date.now();
+
+    console.log(`[${MODULE_DISPLAY_NAME}] 当前设备识别为: ${state.deviceType}`);
+
+    registerSlashCommands();
+    initEventListeners();
+    startTimers();
+
+    ensureTodayRecord();
+    saveSettingsDebounced();
+
+    // 等待 DOM 就绪后创建悬浮按钮
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => {
+            setTimeout(createFloatingButton, 500);
+        });
+    } else {
+        setTimeout(createFloatingButton, 500);
+    }
+
+    console.log(`[${MODULE_DISPLAY_NAME}] 初始化完成，点击右下角悬浮按钮或输入 /usage 查看统计`);
+}

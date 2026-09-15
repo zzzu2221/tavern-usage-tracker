@@ -1,0 +1,14 @@
+{
+  "display_name": "酒馆使用追踪器 (Tavern Usage Tracker)",
+  "loading_order": 100,
+  "js": "index.js",
+  "css": "style.css",
+  "author": "You",
+  "version": "1.0.0",
+  "homePage": "",
+  "auto_update": false,
+  "minimum_client_version": "1.10.0",
+  "hooks": {
+    "activate": "onActivate"
+  }
+}
