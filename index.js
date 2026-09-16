@@ -119,6 +119,8 @@ function isPageActive() {
 
 // ========== 每秒计时回调 ==========
 function tick() {
+    const settings = getSettings();
+    if (settings.enabled === false) return;
     if (!state.isActive) return;
     if (isIdle() || !isPageActive()) {
         state.isActive = false;
@@ -132,6 +134,8 @@ function tick() {
 
 // ========== 输入字数统计 ==========
 function handleMessageSent(data) {
+    const settings = getSettings();
+    if (settings.enabled === false) return;
     let message = null;
     if (data && typeof data === 'object') {
         if (data.message && typeof data.message === 'object') {
@@ -561,6 +565,118 @@ async function showStatsPopup() {
     }, 5000);
 }
 
+// ========== 应用启用状态（显示/隐藏悬浮按钮） ==========
+function applyEnabled() {
+    const settings = getSettings();
+    const fab = document.getElementById('tut-float-btn');
+
+    // 扩展总开关关闭：移除悬浮按钮
+    if (settings.enabled === false) {
+        if (fab) fab.remove();
+        state.floatBtn = null;
+        return;
+    }
+
+    // 悬浮按钮开关
+    if (settings.floatingButtonEnabled === false) {
+        if (fab) fab.remove();
+        state.floatBtn = null;
+    } else if (!fab) {
+        createFloatingButton();
+    }
+}
+
+// ========== 在扩展管理页注册设置面板 ==========
+function ensureSettingsPanel() {
+    try {
+        const host = document.getElementById('extensions_settings') || document.getElementById('extensions_settings2');
+        if (!host) return false;
+        if (document.getElementById('tut-ext-drawer')) return true;
+
+        const s = getSettings();
+        const wrap = document.createElement('div');
+        wrap.id = 'tut-ext-drawer';
+        wrap.innerHTML =
+            '<div class="inline-drawer"><div class="inline-drawer-toggle inline-drawer-header">' +
+                '<b><span class="fa-solid fa-chart-simple" style="margin-right:6px"></span>酒馆使用追踪器</b>' +
+                '<div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>' +
+                '<div class="inline-drawer-content">' +
+                    '<label class="checkbox_label"><input type="checkbox" id="tut-cfg-enable"><span><b>启用扩展</b>（关闭后停止计时和字数统计）</span></label>' +
+                    '<label class="checkbox_label" style="margin-top:6px"><input type="checkbox" id="tut-cfg-fab"><span><b>显示悬浮按钮</b>（右下角 🍺，可拖动）</span></label>' +
+                    '<div style="margin-top:10px;margin-bottom:4px"><b>空闲超时（分钟）</b>：超过该时间无操作自动暂停计时</div>' +
+                    '<input type="number" id="tut-cfg-idle" min="1" max="120" style="width:80px;padding:4px 8px;border-radius:6px;border:1px solid var(--SmartThemeBorderColor);background:var(--SmartThemeEmColor);color:var(--SmartThemeBodyColor)">' +
+                    '<div class="menu_button menu_button_icon interactable" id="tut-cfg-view" style="width:100%;justify-content:center;margin-top:10px"><span class="fa-solid fa-chart-column"></span><span>查看使用统计</span></div>' +
+                    '<div class="menu_button menu_button_icon interactable" id="tut-cfg-reset" style="width:100%;justify-content:center;margin-top:6px"><span class="fa-solid fa-rotate-left"></span><span>重置今日数据</span></div>' +
+                '</div></div>';
+        host.appendChild(wrap);
+
+        // 启用扩展开关
+        const en = wrap.querySelector('#tut-cfg-enable');
+        en.checked = s.enabled !== false;
+        en.addEventListener('change', () => {
+            getSettings().enabled = en.checked;
+            saveSettingsDebounced();
+            applyEnabled();
+            if (typeof toastr !== 'undefined') {
+                toastr.success(en.checked ? '使用追踪已启用' : '使用追踪已停用');
+            }
+        });
+
+        // 悬浮按钮开关
+        const fab = wrap.querySelector('#tut-cfg-fab');
+        fab.checked = s.floatingButtonEnabled !== false;
+        fab.addEventListener('change', () => {
+            getSettings().floatingButtonEnabled = fab.checked;
+            saveSettingsDebounced();
+            applyEnabled();
+            if (typeof toastr !== 'undefined') {
+                toastr.success(fab.checked ? '悬浮按钮已显示' : '悬浮按钮已隐藏');
+            }
+        });
+
+        // 空闲超时输入
+        const idleInput = wrap.querySelector('#tut-cfg-idle');
+        idleInput.value = Math.round((s.idleTimeout || 300) / 60);
+        idleInput.addEventListener('change', () => {
+            let val = parseInt(idleInput.value, 10);
+            if (isNaN(val) || val < 1) val = 1;
+            if (val > 120) val = 120;
+            idleInput.value = val;
+            getSettings().idleTimeout = val * 60;
+            saveSettingsDebounced();
+            if (typeof toastr !== 'undefined') {
+                toastr.success(`空闲超时已设为 ${val} 分钟`);
+            }
+        });
+
+        // 查看统计按钮
+        wrap.querySelector('#tut-cfg-view').addEventListener('click', () => {
+            showStatsPopup();
+        });
+
+        // 重置今日数据按钮
+        wrap.querySelector('#tut-cfg-reset').addEventListener('click', () => {
+            if (confirm('确定要重置今日的使用时长和字数数据吗？此操作不可撤销。')) {
+                const today = getTodayKey();
+                const settings = getSettings();
+                settings.daily[today] = {
+                    pc: { duration: 0, chars: 0 },
+                    mobile: { duration: 0, chars: 0 },
+                };
+                saveSettingsDebounced();
+                if (typeof toastr !== 'undefined') {
+                    toastr.success('今日数据已重置');
+                }
+            }
+        });
+
+        return true;
+    } catch (e) {
+        console.warn(`[${MODULE_DISPLAY_NAME}] 注册扩展设置面板失败:`, e);
+        return false;
+    }
+}
+
 // ========== 注册斜杠命令 ==========
 function registerSlashCommands() {
     try {
@@ -657,14 +773,49 @@ export async function onActivate() {
     ensureTodayRecord();
     saveSettingsDebounced();
 
-    // 等待 DOM 就绪后创建悬浮按钮
+    // 应用就绪后创建悬浮按钮和设置面板
+    const setupUI = () => {
+        applyEnabled();
+        ensureSettingsPanel();
+    };
+
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => {
-            setTimeout(createFloatingButton, 500);
+            setTimeout(setupUI, 500);
         });
     } else {
-        setTimeout(createFloatingButton, 500);
+        setTimeout(setupUI, 500);
     }
 
+    // ST 扩展设置容器是异步构建的，稍后重试几次确保面板挂上
+    setTimeout(() => { ensureSettingsPanel(); }, 1500);
+    setTimeout(() => { ensureSettingsPanel(); applyEnabled(); }, 4000);
+
+    // APP_READY 事件后再尝试一次
+    try {
+        eventSource.once(event_types.APP_READY, () => {
+            setTimeout(setupUI, 300);
+        });
+    } catch (e) { /* 兼容不支持 once 的版本 */ }
+
     console.log(`[${MODULE_DISPLAY_NAME}] 初始化完成，点击右下角悬浮按钮或输入 /usage 查看统计`);
+}
+
+// ========== 自动初始化（不依赖 hooks 机制，模块加载即执行） ==========
+let _tut_initialized = false;
+async function _tut_autoInit() {
+    if (_tut_initialized) return;
+    _tut_initialized = true;
+    try {
+        await onActivate();
+    } catch (e) {
+        console.error(`[${MODULE_DISPLAY_NAME}] 自动初始化失败:`, e);
+        _tut_initialized = false; // 允许重试
+    }
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _tut_autoInit);
+} else {
+    _tut_autoInit();
 }
