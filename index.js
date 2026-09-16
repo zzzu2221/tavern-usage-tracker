@@ -40,6 +40,7 @@ const state = {
     dragMoved: false,
     currentPopup: null,       // 当前打开的弹窗实例
     popupUpdateTimer: null,   // 弹窗实时更新定时器
+    initialized: false,       // 防重复初始化标志
 };
 
 // ========== 获取 SillyTavern 上下文 ==========
@@ -756,6 +757,13 @@ function startTimers() {
 
 // ========== 生命周期钩子 ==========
 export async function onActivate() {
+    // 防重复初始化：避免 hooks 和自动初始化都调用导致事件监听器重复注册
+    if (state.initialized) {
+        console.log(`[${MODULE_DISPLAY_NAME}] 已初始化，跳过重复调用`);
+        return;
+    }
+    state.initialized = true;
+
     console.log(`[${MODULE_DISPLAY_NAME}] 扩展已激活`);
 
     getSettings();
@@ -802,15 +810,13 @@ export async function onActivate() {
 }
 
 // ========== 自动初始化（不依赖 hooks 机制，模块加载即执行） ==========
-let _tut_initialized = false;
 async function _tut_autoInit() {
-    if (_tut_initialized) return;
-    _tut_initialized = true;
+    if (state.initialized) return;
     try {
         await onActivate();
     } catch (e) {
         console.error(`[${MODULE_DISPLAY_NAME}] 自动初始化失败:`, e);
-        _tut_initialized = false; // 允许重试
+        state.initialized = false; // 允许重试
     }
 }
 
