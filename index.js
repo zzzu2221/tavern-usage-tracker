@@ -357,180 +357,110 @@ function generateStatsHTML() {
     return html;
 }
 
-// ========== 悬浮按钮 ==========
+// ========== 悬浮按钮（参考微信插件：圆形、屏幕60%位置、pointerdown） ==========
 function createFloatingButton() {
     const settings = getSettings();
     if (!settings.floatingButtonEnabled) return;
-
-    // 避免重复创建
     if (document.getElementById('tut-float-btn')) {
         state.floatBtn = document.getElementById('tut-float-btn');
         return;
     }
-
     const btn = document.createElement('div');
     btn.id = 'tut-float-btn';
-    btn.className = 'tut-float-btn tut-float-' + state.deviceType; // 添加设备类型 class
-    btn.innerHTML = `
-        <div class="tut-float-icon">🍺</div>
-        <div class="tut-float-text">
-            <div class="tut-float-label">今日</div>
-            <div class="tut-float-duration">0s</div>
-        </div>
-    `;
-
-    // 设置位置
-    const pos = settings.floatingButtonPosition;
-    if (pos && typeof pos.x === 'number' && typeof pos.y === 'number') {
-        btn.style.left = pos.x + 'px';
-        btn.style.top = pos.y + 'px';
-        btn.style.right = 'auto';
-        btn.style.bottom = 'auto';
-        // 确保位置在可视区域内（移动端可能有底部输入框）
-        setTimeout(() => {
-            const rect = btn.getBoundingClientRect();
-            const maxBottom = window.innerHeight - (state.deviceType === 'mobile' ? 90 : 20);
-            if (rect.bottom > maxBottom) {
-                btn.style.top = Math.max(10, maxBottom - rect.height) + 'px';
-            }
-        }, 100);
-    }
-
+    btn.className = 'tut-float-btn';
+    btn.title = '查看使用统计';
+    btn.innerHTML = '<span class="tut-float-icon">🍺</span>';
     document.body.appendChild(btn);
     state.floatBtn = btn;
-
-    // 点击事件（与拖动区分）
-    btn.addEventListener('click', (e) => {
-        if (state.dragMoved) {
-            state.dragMoved = false;
-            return;
-        }
-        showStatsPopup();
-    });
-
-    // 拖动支持
-    btn.addEventListener('mousedown', startDrag);
-    btn.addEventListener('touchstart', startDragTouch, { passive: false });
-
-    // 启动更新定时器
-    updateFloatButtonText();
+    applyFloatButtonPosition(btn);
+    enableFloatButtonDrag(btn, () => showStatsPopup());
+    updateFloatButtonState();
     if (state.floatBtnUpdateTimer) clearInterval(state.floatBtnUpdateTimer);
-    state.floatBtnUpdateTimer = setInterval(updateFloatButtonText, 3000);
+    state.floatBtnUpdateTimer = setInterval(updateFloatButtonState, 3000);
 }
 
-function updateFloatButtonText() {
-    if (!state.floatBtn) return;
+function applyFloatButtonPosition(btn) {
     const settings = getSettings();
-    const today = getTodayKey();
-    const data = settings.daily[today] || { pc: { duration: 0 }, mobile: { duration: 0 } };
-    const total = data.pc.duration + data.mobile.duration;
-    const durationEl = state.floatBtn.querySelector('.tut-float-duration');
-    if (durationEl) {
-        durationEl.textContent = formatDurationShort(total);
+    const pos = settings.floatingButtonPosition;
+    const bw = btn.offsetWidth || 52;
+    const bh = btn.offsetHeight || 52;
+    if (pos && typeof pos.x === 'number' && typeof pos.y === 'number') {
+        // 检查保存的位置是否合理：距离底部至少100px（避开移动端输入框）
+        const distanceFromBottom = window.innerHeight - (pos.y + bh);
+        if (distanceFromBottom < 100) {
+            // 位置太靠底，自动修正到屏幕高度60%处
+            const cx = window.innerWidth - bw - 16;
+            const cy = window.innerHeight * 0.6;
+            btn.style.left = cx + 'px';
+            btn.style.top = cy + 'px';
+            // 更新保存的位置
+            settings.floatingButtonPosition = { x: cx, y: cy };
+            saveSettingsDebounced();
+        } else {
+            btn.style.left = Math.max(0, pos.x) + 'px';
+            btn.style.top = Math.max(0, pos.y) + 'px';
+        }
+    } else {
+        const cx = window.innerWidth - bw - 16;
+        const cy = window.innerHeight * 0.6;
+        btn.style.left = cx + 'px';
+        btn.style.top = cy + 'px';
     }
-    // 活跃状态指示
+    btn.style.right = 'auto';
+    btn.style.bottom = 'auto';
+}
+
+function enableFloatButtonDrag(btn, onTap) {
+    let drag = null;
+    function down(e) {
+        if (e.button !== undefined && e.button !== 0) return;
+        const r = btn.getBoundingClientRect();
+        drag = { ox: r.left, oy: r.top, sx: e.clientX, sy: e.clientY, moved: false };
+        btn.classList.add('tut-float-dragging');
+        document.addEventListener('pointermove', move);
+        document.addEventListener('pointerup', up);
+        e.preventDefault();
+    }
+    function move(e) {
+        if (!drag) return;
+        const dx = e.clientX - drag.sx;
+        const dy = e.clientY - drag.sy;
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) drag.moved = true;
+        const bw = btn.offsetWidth || 52;
+        const bh = btn.offsetHeight || 52;
+        let x = Math.max(4, Math.min(window.innerWidth - bw - 4, drag.ox + dx));
+        let y = Math.max(4, Math.min(window.innerHeight - bh - 4, drag.oy + dy));
+        btn.style.left = x + 'px';
+        btn.style.top = y + 'px';
+        btn.style.right = 'auto';
+        btn.style.bottom = 'auto';
+        e.preventDefault();
+    }
+    function up(e) {
+        if (!drag) return;
+        document.removeEventListener('pointermove', move);
+        document.removeEventListener('pointerup', up);
+        btn.classList.remove('tut-float-dragging');
+        if (drag.moved) {
+            const settings = getSettings();
+            const r = btn.getBoundingClientRect();
+            settings.floatingButtonPosition = { x: r.left, y: r.top };
+            saveSettingsDebounced();
+        } else {
+            if (onTap) onTap();
+        }
+        drag = null;
+        e.preventDefault();
+    }
+    btn.addEventListener('pointerdown', down);
+}
+
+function updateFloatButtonState() {
+    if (!state.floatBtn) return;
     if (state.isActive) {
         state.floatBtn.classList.add('tut-float-active');
     } else {
         state.floatBtn.classList.remove('tut-float-active');
-    }
-}
-
-// 桌面端拖动
-function startDrag(e) {
-    state.isDragging = true;
-    state.dragMoved = false;
-    state.dragStartX = e.clientX;
-    state.dragStartY = e.clientY;
-    const rect = state.floatBtn.getBoundingClientRect();
-    state.dragOrigX = rect.left;
-    state.dragOrigY = rect.top;
-    state.floatBtn.style.right = 'auto';
-    state.floatBtn.style.bottom = 'auto';
-    state.floatBtn.classList.add('tut-float-dragging');
-    document.addEventListener('mousemove', onDrag);
-    document.addEventListener('mouseup', endDrag);
-    e.preventDefault();
-}
-
-function onDrag(e) {
-    if (!state.isDragging) return;
-    const dx = e.clientX - state.dragStartX;
-    const dy = e.clientY - state.dragStartY;
-    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
-        state.dragMoved = true;
-    }
-    let newX = state.dragOrigX + dx;
-    let newY = state.dragOrigY + dy;
-    // 边界限制
-    newX = Math.max(0, Math.min(window.innerWidth - state.floatBtn.offsetWidth, newX));
-    newY = Math.max(0, Math.min(window.innerHeight - state.floatBtn.offsetHeight, newY));
-    state.floatBtn.style.left = newX + 'px';
-    state.floatBtn.style.top = newY + 'px';
-}
-
-function endDrag() {
-    if (!state.isDragging) return;
-    state.isDragging = false;
-    state.floatBtn.classList.remove('tut-float-dragging');
-    document.removeEventListener('mousemove', onDrag);
-    document.removeEventListener('mouseup', endDrag);
-    // 保存位置
-    if (state.dragMoved) {
-        const settings = getSettings();
-        const rect = state.floatBtn.getBoundingClientRect();
-        settings.floatingButtonPosition = { x: rect.left, y: rect.top };
-        saveSettingsDebounced();
-    }
-}
-
-// 移动端拖动
-function startDragTouch(e) {
-    if (e.touches.length !== 1) return;
-    const touch = e.touches[0];
-    state.isDragging = true;
-    state.dragMoved = false;
-    state.dragStartX = touch.clientX;
-    state.dragStartY = touch.clientY;
-    const rect = state.floatBtn.getBoundingClientRect();
-    state.dragOrigX = rect.left;
-    state.dragOrigY = rect.top;
-    state.floatBtn.style.right = 'auto';
-    state.floatBtn.style.bottom = 'auto';
-    state.floatBtn.classList.add('tut-float-dragging');
-    document.addEventListener('touchmove', onDragTouch, { passive: false });
-    document.addEventListener('touchend', endDragTouch);
-    e.preventDefault();
-}
-
-function onDragTouch(e) {
-    if (!state.isDragging || e.touches.length !== 1) return;
-    const touch = e.touches[0];
-    const dx = touch.clientX - state.dragStartX;
-    const dy = touch.clientY - state.dragStartY;
-    if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
-        state.dragMoved = true;
-    }
-    let newX = state.dragOrigX + dx;
-    let newY = state.dragOrigY + dy;
-    newX = Math.max(0, Math.min(window.innerWidth - state.floatBtn.offsetWidth, newX));
-    newY = Math.max(0, Math.min(window.innerHeight - state.floatBtn.offsetHeight, newY));
-    state.floatBtn.style.left = newX + 'px';
-    state.floatBtn.style.top = newY + 'px';
-    e.preventDefault();
-}
-
-function endDragTouch() {
-    if (!state.isDragging) return;
-    state.isDragging = false;
-    state.floatBtn.classList.remove('tut-float-dragging');
-    document.removeEventListener('touchmove', onDragTouch);
-    document.removeEventListener('touchend', endDragTouch);
-    if (state.dragMoved) {
-        const settings = getSettings();
-        const rect = state.floatBtn.getBoundingClientRect();
-        settings.floatingButtonPosition = { x: rect.left, y: rect.top };
-        saveSettingsDebounced();
     }
 }
 

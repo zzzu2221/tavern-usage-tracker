@@ -307,85 +307,46 @@
     margin: 4px 0;
 }
 
-/* ========== 悬浮按钮 ========== */
+/* ========== 悬浮按钮（参考微信插件：圆形、可拖动、位置由JS控制） ========== */
 .tut-float-btn {
     position: fixed;
-    right: 20px;
-    bottom: 20px;
-    z-index: 99999;
+    z-index: 9999999;
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #ff9800, #f57c00);
+    color: #fff;
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 8px 14px 8px 10px;
-    background: var(--SmartThemeEmColor, #fff);
-    border: 1px solid var(--SmartThemeBorderColor, #ddd);
-    border-radius: 24px;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
-    cursor: pointer;
+    justify-content: center;
+    cursor: grab;
+    touch-action: none;
     user-select: none;
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
-    font-family: var(--mainFont, 'Segoe UI', sans-serif);
+    -webkit-user-select: none;
+    box-shadow: 0 4px 16px rgba(255, 152, 0, 0.45);
+    font-size: 24px;
+    transition: transform .15s ease, box-shadow .15s ease;
 }
 
-/* 移动端默认位置：抬高避开底部输入框 */
-.tut-float-btn.tut-float-mobile {
-    right: 12px;
-    bottom: calc(80px + env(safe-area-inset-bottom, 0px));
-}
-
-.tut-float-btn:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
-}
-
-.tut-float-btn:active {
-    transform: translateY(0);
-}
+.tut-float-btn:active { cursor: grabbing; }
+.tut-float-btn:hover { transform: scale(1.08); }
+.tut-float-btn .tut-float-icon { pointer-events: none; line-height: 1; }
 
 .tut-float-btn.tut-float-dragging {
     transition: none;
     cursor: grabbing;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+    box-shadow: 0 8px 24px rgba(255, 152, 0, 0.55);
     transform: scale(1.05);
 }
 
-.tut-float-icon {
-    font-size: 22px;
-    line-height: 1;
-}
-
-.tut-float-text {
-    display: flex;
-    flex-direction: column;
-    line-height: 1.2;
-}
-
-.tut-float-label {
-    font-size: 10px;
-    opacity: 0.6;
-    color: var(--SmartThemeBodyColor, #333);
-}
-
-.tut-float-duration {
-    font-size: 15px;
-    font-weight: 700;
-    color: var(--SmartThemeBodyColor, #333);
-    font-variant-numeric: tabular-nums;
-}
-
 /* 活跃状态指示（呼吸效果） */
-.tut-float-btn.tut-float-active .tut-float-icon {
+.tut-float-btn.tut-float-active {
     animation: tut-pulse 2s ease-in-out infinite;
 }
 
 @keyframes tut-pulse {
-    0%, 100% { transform: scale(1); opacity: 1; }
-    50% { transform: scale(1.15); opacity: 0.8; }
-}
-
-.tut-float-btn.tut-float-active {
-    border-color: rgba(76, 175, 80, 0.5);
-    box-shadow: 0 4px 16px rgba(76, 175, 80, 0.2);
+    0%, 100% { transform: scale(1); box-shadow: 0 4px 16px rgba(255, 152, 0, 0.45); }
+    50% { transform: scale(1.1); box-shadow: 0 6px 24px rgba(255, 152, 0, 0.65); }
 }
 
 /* ========== 移动端适配 ========== */
@@ -415,21 +376,6 @@
     .tut-table th,
     .tut-table td {
         padding: 6px 6px;
-    }
-
-    /* 移动端悬浮按钮更紧凑（位置已在 .tut-float-mobile 中设置） */
-    .tut-float-btn {
-        padding: 6px 12px 6px 8px;
-        gap: 6px;
-        max-width: calc(100vw - 24px);
-    }
-
-    .tut-float-icon {
-        font-size: 18px;
-    }
-
-    .tut-float-duration {
-        font-size: 13px;
     }
 
     .tut-bar-track {
