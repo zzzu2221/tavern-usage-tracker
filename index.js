@@ -370,7 +370,7 @@ function createFloatingButton() {
 
     const btn = document.createElement('div');
     btn.id = 'tut-float-btn';
-    btn.className = 'tut-float-btn';
+    btn.className = 'tut-float-btn tut-float-' + state.deviceType; // 添加设备类型 class
     btn.innerHTML = `
         <div class="tut-float-icon">🍺</div>
         <div class="tut-float-text">
@@ -386,6 +386,14 @@ function createFloatingButton() {
         btn.style.top = pos.y + 'px';
         btn.style.right = 'auto';
         btn.style.bottom = 'auto';
+        // 确保位置在可视区域内（移动端可能有底部输入框）
+        setTimeout(() => {
+            const rect = btn.getBoundingClientRect();
+            const maxBottom = window.innerHeight - (state.deviceType === 'mobile' ? 90 : 20);
+            if (rect.bottom > maxBottom) {
+                btn.style.top = Math.max(10, maxBottom - rect.height) + 'px';
+            }
+        }, 100);
     }
 
     document.body.appendChild(btn);
