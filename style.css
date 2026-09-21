@@ -1,5 +1,12 @@
 /* ========== 酒馆使用追踪器 样式（固定颜色，不依赖主题变量） ========== */
 
+/* 全局禁用文字阴影，避免重影效果 */
+#tut-popup-overlay,
+#tut-popup-overlay * {
+    text-shadow: none !important;
+    filter: none !important;
+}
+
 .tut-stats {
     font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
     color: #333;
