@@ -434,7 +434,8 @@ function applyFloatButtonPosition(btn) {
 function enableFloatButtonDrag(btn, onTap) {
     let drag = null;
     function down(e) {
-        if (e.button !== undefined && e.button !== 0) return;
+        // 只响应主按键（鼠标左键=0，触摸可能为0或undefined），忽略右键
+        if (e.button !== undefined && e.button > 0) return;
         const r = btn.getBoundingClientRect();
         drag = { ox: r.left, oy: r.top, sx: e.clientX, sy: e.clientY, moved: false };
         btn.classList.add('tut-float-dragging');
