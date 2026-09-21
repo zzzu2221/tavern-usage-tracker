@@ -98,7 +98,6 @@
     border-radius: 10px;
     padding: 14px 12px 10px;
     border: 1px solid #e0e0e0;
-    overflow-x: auto;
 }
 
 .tut-chart-legend {
@@ -375,21 +374,30 @@
     }
 
     .tut-bar-track {
-        max-width: 28px;
+        max-width: 22px;
     }
 
-    /* 移动端柱状图容器横向滚动 */
-    .tut-chart {
-        padding: 14px 8px 10px;
-    }
-
+    /* 移动端柱状图收窄，确保7根柱子一行内显示，不要横向滚动 */
     .tut-bars {
-        gap: 4px;
-        min-width: max-content;
+        gap: 2px;
+        padding: 0 2px;
     }
 
     .tut-bar-col {
-        min-width: 40px;
+        min-width: 0;
+        flex: 1;
+    }
+
+    .tut-bar-value {
+        font-size: 10px;
+    }
+
+    .tut-bar-label {
+        font-size: 10px;
+    }
+
+    .tut-bar-weekday {
+        font-size: 9px;
     }
 
     .tut-stats {
