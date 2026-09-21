@@ -489,41 +489,116 @@ function updateFloatButtonState() {
 // ========== 显示统计弹窗 ==========
 async function showStatsPopup() {
     // 如果已有弹窗，先关闭
+    closeStatsPopup();
+
+    // 创建全屏遮罩
+    const overlay = document.createElement('div');
+    overlay.id = 'tut-popup-overlay';
+    overlay.style.cssText = `
+        position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+        width: 100vw; height: 100vh; height: 100dvh;
+        background: rgba(0,0,0,0.5);
+        z-index: 9999998;
+        display: flex; align-items: center; justify-content: center;
+        padding: 20px;
+        box-sizing: border-box;
+    `;
+
+    // 创建内容卡片
+    const card = document.createElement('div');
+    card.id = 'tut-popup-card';
+    card.style.cssText = `
+        background: #fff;
+        border-radius: 16px;
+        width: 100%;
+        max-width: 560px;
+        max-height: 90vh;
+        max-height: 90dvh;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    `;
+
+    // 头部（标题 + 关闭按钮）
+    const header = document.createElement('div');
+    header.style.cssText = `
+        padding: 16px 20px 8px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid #eee;
+        flex-shrink: 0;
+    `;
+    header.innerHTML = `
+        <div style="font-size:18px;font-weight:700;color:#222;">📊 使用统计</div>
+        <button id="tut-popup-close" style="
+            background:#f5f5f5;border:none;border-radius:50%;
+            width:32px;height:32px;font-size:16px;cursor:pointer;
+            display:flex;align-items:center;justify-content:center;color:#666;
+        ">✕</button>
+    `;
+
+    // 内容区域（可滚动）
+    const content = document.createElement('div');
+    content.id = 'tut-popup-content';
+    content.style.cssText = `
+        flex: 1;
+        overflow-y: auto;
+        padding: 16px 20px;
+        color: #333;
+    `;
+    content.innerHTML = generateStatsHTML();
+
+    // 底部按钮
+    const footer = document.createElement('div');
+    footer.style.cssText = `
+        padding: 12px 20px 16px;
+        border-top: 1px solid #eee;
+        flex-shrink: 0;
+        text-align: center;
+    `;
+    footer.innerHTML = `
+        <button id="tut-popup-ok" style="
+            background:#2196f3;color:#fff;border:none;border-radius:8px;
+            padding:10px 40px;font-size:15px;font-weight:600;cursor:pointer;
+        ">确定</button>
+    `;
+
+    // 组装
+    card.appendChild(header);
+    card.appendChild(content);
+    card.appendChild(footer);
+    overlay.appendChild(card);
+    document.documentElement.appendChild(overlay);
+
+    state.currentPopup = overlay;
+
+    // 关闭事件
+    const close = () => closeStatsPopup();
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) close();
+    });
+    header.querySelector('#tut-popup-close').addEventListener('click', close);
+    footer.querySelector('#tut-popup-ok').addEventListener('click', close);
+
+    // 弹窗打开时每5秒刷新内容
+    state.popupUpdateTimer = setInterval(() => {
+        if (content && content.isConnected) {
+            content.innerHTML = generateStatsHTML();
+        }
+    }, 5000);
+}
+
+function closeStatsPopup() {
     if (state.currentPopup) {
-        try { state.currentPopup.hide(); } catch (e) { /* ignore */ }
+        try { state.currentPopup.remove(); } catch (e) { /* ignore */ }
         state.currentPopup = null;
     }
     if (state.popupUpdateTimer) {
         clearInterval(state.popupUpdateTimer);
         state.popupUpdateTimer = null;
     }
-
-    // Popup 构造函数是位置参数：(content, type, inputValue, options)
-    const popup = new Popup(
-        generateStatsHTML(),
-        POPUP_TYPE.TEXT,
-        '',
-        {
-            allowVerticalScrolling: true,
-            wide: true,
-            onClose: () => {
-                if (state.popupUpdateTimer) {
-                    clearInterval(state.popupUpdateTimer);
-                    state.popupUpdateTimer = null;
-                }
-                state.currentPopup = null;
-            },
-        }
-    );
-    state.currentPopup = popup;
-    await popup.show();
-
-    // 弹窗打开时每5秒刷新内容（通过 popup.content 直接更新）
-    state.popupUpdateTimer = setInterval(() => {
-        if (popup && popup.content && popup.content.isConnected) {
-            popup.content.innerHTML = generateStatsHTML();
-        }
-    }, 5000);
 }
 
 // ========== 应用启用状态（显示/隐藏悬浮按钮） ==========
