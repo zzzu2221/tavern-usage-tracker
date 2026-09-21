@@ -138,15 +138,36 @@ function handleMessageSent(data) {
     const settings = getSettings();
     if (settings.enabled === false) return;
     let message = null;
-    if (data && typeof data === 'object') {
+
+    if (typeof data === 'number') {
+        // MESSAGE_SENT 事件传的是消息ID（数字索引），从 chat 数组获取消息对象
+        const chat = ctx.chat || [];
+        message = chat[data];
+    } else if (data && typeof data === 'object') {
         if (data.message && typeof data.message === 'object') {
             message = data.message;
         } else if (typeof data.mes === 'string') {
             message = data;
         }
     }
+
     if (!message) return;
     const text = message.mes || '';
+    const charCount = text.length;
+    if (charCount > 0) {
+        const record = ensureTodayRecord();
+        record[state.deviceType].chars += charCount;
+        saveSettingsDebounced();
+    }
+}
+
+// 直接从输入框获取内容统计字数（更可靠）
+function handleInputSend() {
+    const settings = getSettings();
+    if (settings.enabled === false) return;
+    const textarea = document.getElementById('send_textarea');
+    if (!textarea) return;
+    const text = (textarea.value || '').trim();
     const charCount = text.length;
     if (charCount > 0) {
         const record = ensureTodayRecord();
@@ -637,6 +658,20 @@ function registerSlashCommands() {
 // ========== 事件监听 ==========
 function initEventListeners() {
     eventSource.on(event_types.MESSAGE_SENT, handleMessageSent);
+
+    // 直接监听输入框发送事件（更可靠，不依赖事件参数格式）
+    const sendBtn = document.getElementById('send_but');
+    if (sendBtn) {
+        sendBtn.addEventListener('click', handleInputSend);
+    }
+    const textarea = document.getElementById('send_textarea');
+    if (textarea) {
+        textarea.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+                handleInputSend();
+            }
+        });
+    }
 
     const activityEvents = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click', 'wheel'];
     for (const evt of activityEvents) {
