@@ -98,6 +98,7 @@
     border-radius: 10px;
     padding: 14px 12px 10px;
     border: 1px solid #e0e0e0;
+    overflow-x: auto;
 }
 
 .tut-chart-legend {
@@ -375,6 +376,20 @@
 
     .tut-bar-track {
         max-width: 28px;
+    }
+
+    /* 移动端柱状图容器横向滚动 */
+    .tut-chart {
+        padding: 14px 8px 10px;
+    }
+
+    .tut-bars {
+        gap: 4px;
+        min-width: max-content;
+    }
+
+    .tut-bar-col {
+        min-width: 40px;
     }
 
     .tut-stats {
