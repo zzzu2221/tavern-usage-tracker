@@ -808,60 +808,67 @@ function startTimers() {
 
 // ========== 生命周期钩子 ==========
 export async function onActivate() {
-    // 防重复初始化：避免 hooks 和自动初始化都调用导致事件监听器重复注册
+    // 防重复初始化
     if (state.initialized) {
         console.log(`[${MODULE_DISPLAY_NAME}] 已初始化，跳过重复调用`);
         return;
     }
     state.initialized = true;
 
-    console.log(`[${MODULE_DISPLAY_NAME}] 扩展已激活`);
+    console.log(`[${MODULE_DISPLAY_NAME}] 扩展已激活，等待 APP_READY 后初始化...`);
 
-    getSettings();
-    state.deviceType = detectDeviceType();
-    state.lastActivityTime = Date.now();
-    state.isActive = true;
-    state.sessionStart = Date.now();
+    // 核心问题：onActivate 调用太早，此时酒馆还没把磁盘上的设置加载到 extensionSettings。
+    // 如果现在就 getSettings()，会创建默认值（enabled: true），后续定时保存就会覆盖用户的设置。
+    // 解决方案：等 APP_READY 事件（酒馆完全加载完）后再真正初始化。
+    const doInit = () => {
+        console.log(`[${MODULE_DISPLAY_NAME}] APP_READY，开始真正初始化`);
 
-    console.log(`[${MODULE_DISPLAY_NAME}] 当前设备识别为: ${state.deviceType}`);
+        getSettings();
+        state.deviceType = detectDeviceType();
+        state.lastActivityTime = Date.now();
+        state.isActive = true;
+        state.sessionStart = Date.now();
 
-    registerSlashCommands();
-    initEventListeners();
-    startTimers();
+        console.log(`[${MODULE_DISPLAY_NAME}] 当前设备识别为: ${state.deviceType}`);
 
-    ensureTodayRecord();
-    // 注意：初始化时不要主动 saveSettings()！
-    // 因为 onActivate 调用时机很早，此时酒馆可能还没从磁盘加载完设置，
-    // 主动保存会把默认值（enabled: true）写回磁盘，覆盖用户的设置。
-    // 数据持久化交给定时保存（30秒一次）和用户修改设置时触发。
+        registerSlashCommands();
+        initEventListeners();
+        startTimers();
 
-    // 应用就绪后创建悬浮按钮和设置面板
-    const setupUI = () => {
-        applyEnabled();
-        ensureSettingsPanel();
+        ensureTodayRecord();
+
+        // 创建悬浮按钮和设置面板
+        const setupUI = () => {
+            applyEnabled();
+            ensureSettingsPanel();
+        };
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => {
+                setTimeout(setupUI, 500);
+            });
+        } else {
+            setTimeout(setupUI, 500);
+        }
+
+        // ST 扩展设置容器是异步构建的，稍后重试几次确保面板挂上
+        setTimeout(() => { ensureSettingsPanel(); }, 1500);
+        setTimeout(() => { ensureSettingsPanel(); applyEnabled(); }, 4000);
+
+        console.log(`[${MODULE_DISPLAY_NAME}] 初始化完成，点击右下角悬浮按钮或输入 /usage 查看统计`);
     };
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => {
-            setTimeout(setupUI, 500);
-        });
-    } else {
-        setTimeout(setupUI, 500);
-    }
-
-    // ST 扩展设置容器是异步构建的，稍后重试几次确保面板挂上
-    setTimeout(() => { ensureSettingsPanel(); }, 1500);
-    setTimeout(() => { ensureSettingsPanel(); applyEnabled(); }, 4000);
-
-    // APP_READY 事件后再尝试一次
+    // 等 APP_READY 事件再初始化
     try {
         const ctx = getCtx();
         ctx.eventSource.once(ctx.event_types.APP_READY, () => {
-            setTimeout(setupUI, 300);
+            setTimeout(doInit, 300); // 再延迟一点点，确保设置完全就绪
         });
-    } catch (e) { /* 兼容不支持 once 的版本 */ }
-
-    console.log(`[${MODULE_DISPLAY_NAME}] 初始化完成，点击右下角悬浮按钮或输入 /usage 查看统计`);
+    } catch (e) {
+        // 万一 APP_READY 事件不可用，兜底：延迟 3 秒后初始化
+        console.warn(`[${MODULE_DISPLAY_NAME}] APP_READY 事件不可用，使用延迟初始化兜底`, e);
+        setTimeout(doInit, 3000);
+    }
 }
 
 
