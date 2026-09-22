@@ -43,30 +43,28 @@ const state = {
     initialized: false,       // 防重复初始化标志
 };
 
-// ========== 获取 SillyTavern 上下文 ==========
-const ctx = SillyTavern.getContext();
-const {
-    eventSource,
-    event_types,
-    extensionSettings,
-    saveSettingsDebounced,
-    SlashCommandParser,
-    SlashCommand,
-    Popup,
-    POPUP_TYPE,
-} = ctx;
+// ========== 获取 SillyTavern 上下文（每次都重新获取，避免引用过时） ==========
+function getCtx() {
+    return SillyTavern.getContext();
+}
 
 // ========== 设置管理 ==========
 function getSettings() {
-    if (!extensionSettings[MODULE_NAME]) {
-        extensionSettings[MODULE_NAME] = structuredClone(defaultSettings);
+    const ctx = getCtx();
+    if (!ctx.extensionSettings[MODULE_NAME]) {
+        ctx.extensionSettings[MODULE_NAME] = structuredClone(defaultSettings);
     }
     for (const key of Object.keys(defaultSettings)) {
-        if (!Object.hasOwn(extensionSettings[MODULE_NAME], key)) {
-            extensionSettings[MODULE_NAME][key] = defaultSettings[key];
+        if (!Object.hasOwn(ctx.extensionSettings[MODULE_NAME], key)) {
+            ctx.extensionSettings[MODULE_NAME][key] = defaultSettings[key];
         }
     }
-    return extensionSettings[MODULE_NAME];
+    return ctx.extensionSettings[MODULE_NAME];
+}
+
+function saveSettings() {
+    const ctx = getCtx();
+    if (ctx.saveSettingsDebounced) ctx.saveSettingsDebounced();
 }
 
 // ========== 设备检测 ==========
@@ -126,7 +124,7 @@ function tick() {
     if (isIdle() || !isPageActive()) {
         state.isActive = false;
         state.sessionStart = null;
-        saveSettingsDebounced();
+        saveSettings();
         return;
     }
     const record = ensureTodayRecord();
@@ -141,7 +139,7 @@ function handleMessageSent(data) {
 
     if (typeof data === 'number') {
         // MESSAGE_SENT 事件传的是消息ID（数字索引），从 chat 数组获取消息对象
-        const chat = ctx.chat || [];
+        const chat = getCtx().chat || [];
         message = chat[data];
     } else if (data && typeof data === 'object') {
         if (data.message && typeof data.message === 'object') {
@@ -157,7 +155,7 @@ function handleMessageSent(data) {
     if (charCount > 0) {
         const record = ensureTodayRecord();
         record[state.deviceType].chars += charCount;
-        saveSettingsDebounced();
+        saveSettings();
     }
 }
 
@@ -172,7 +170,7 @@ function handleInputSend() {
     if (charCount > 0) {
         const record = ensureTodayRecord();
         record[state.deviceType].chars += charCount;
-        saveSettingsDebounced();
+        saveSettings();
     }
 }
 
@@ -416,7 +414,7 @@ function applyFloatButtonPosition(btn) {
             btn.style.top = cy + 'px';
             // 更新保存的位置
             settings.floatingButtonPosition = { x: cx, y: cy };
-            saveSettingsDebounced();
+            saveSettings();
         } else {
             btn.style.left = Math.max(0, pos.x) + 'px';
             btn.style.top = Math.max(0, pos.y) + 'px';
@@ -467,7 +465,7 @@ function enableFloatButtonDrag(btn, onTap) {
             const settings = getSettings();
             const r = btn.getBoundingClientRect();
             settings.floatingButtonPosition = { x: r.left, y: r.top };
-            saveSettingsDebounced();
+            saveSettings();
         } else {
             if (onTap) onTap();
         }
@@ -651,7 +649,7 @@ function ensureSettingsPanel() {
         en.checked = s.enabled !== false;
         en.addEventListener('change', () => {
             getSettings().enabled = en.checked;
-            saveSettingsDebounced();
+            saveSettings();
             applyEnabled();
             if (typeof toastr !== 'undefined') {
                 toastr.success(en.checked ? '使用追踪已启用' : '使用追踪已停用');
@@ -663,7 +661,7 @@ function ensureSettingsPanel() {
         fab.checked = s.floatingButtonEnabled !== false;
         fab.addEventListener('change', () => {
             getSettings().floatingButtonEnabled = fab.checked;
-            saveSettingsDebounced();
+            saveSettings();
             applyEnabled();
             if (typeof toastr !== 'undefined') {
                 toastr.success(fab.checked ? '悬浮按钮已显示' : '悬浮按钮已隐藏');
@@ -679,7 +677,7 @@ function ensureSettingsPanel() {
             if (val > 120) val = 120;
             idleInput.value = val;
             getSettings().idleTimeout = val * 60;
-            saveSettingsDebounced();
+            saveSettings();
             if (typeof toastr !== 'undefined') {
                 toastr.success(`空闲超时已设为 ${val} 分钟`);
             }
@@ -699,7 +697,7 @@ function ensureSettingsPanel() {
                     pc: { duration: 0, chars: 0 },
                     mobile: { duration: 0, chars: 0 },
                 };
-                saveSettingsDebounced();
+                saveSettings();
                 if (typeof toastr !== 'undefined') {
                     toastr.success('今日数据已重置');
                 }
@@ -716,6 +714,8 @@ function ensureSettingsPanel() {
 // ========== 注册斜杠命令 ==========
 function registerSlashCommands() {
     try {
+        const ctx = getCtx();
+        const { SlashCommandParser, SlashCommand } = ctx;
         SlashCommandParser.addCommandObject(SlashCommand.fromProps({
             name: 'usage',
             callback: () => {
@@ -733,6 +733,8 @@ function registerSlashCommands() {
 
 // ========== 事件监听 ==========
 function initEventListeners() {
+    const ctx = getCtx();
+    const { eventSource, event_types } = ctx;
     eventSource.on(event_types.MESSAGE_SENT, handleMessageSent);
 
     // 直接监听输入框发送事件（更可靠，不依赖事件参数格式）
@@ -760,21 +762,21 @@ function initEventListeners() {
         } else {
             state.isActive = false;
             state.sessionStart = null;
-            saveSettingsDebounced();
+            saveSettings();
         }
     });
 
     window.addEventListener('blur', () => {
         state.isActive = false;
         state.sessionStart = null;
-        saveSettingsDebounced();
+        saveSettings();
     });
     window.addEventListener('focus', () => {
         recordActivity();
     });
 
     window.addEventListener('beforeunload', () => {
-        try { saveSettingsDebounced(); } catch (e) { /* ignore */ }
+        try { saveSettings(); } catch (e) { /* ignore */ }
     });
 
     // 窗口大小变化时，确保悬浮按钮在可视区域内
@@ -800,7 +802,7 @@ function initEventListeners() {
 function startTimers() {
     state.timerInterval = setInterval(tick, 1000);
     state.saveInterval = setInterval(() => {
-        saveSettingsDebounced();
+        saveSettings();
     }, 30000);
 }
 
@@ -828,7 +830,7 @@ export async function onActivate() {
     startTimers();
 
     ensureTodayRecord();
-    saveSettingsDebounced();
+    saveSettings();
 
     // 应用就绪后创建悬浮按钮和设置面板
     const setupUI = () => {
@@ -850,7 +852,8 @@ export async function onActivate() {
 
     // APP_READY 事件后再尝试一次
     try {
-        eventSource.once(event_types.APP_READY, () => {
+        const ctx = getCtx();
+        ctx.eventSource.once(ctx.event_types.APP_READY, () => {
             setTimeout(setupUI, 300);
         });
     } catch (e) { /* 兼容不支持 once 的版本 */ }
@@ -858,19 +861,4 @@ export async function onActivate() {
     console.log(`[${MODULE_DISPLAY_NAME}] 初始化完成，点击右下角悬浮按钮或输入 /usage 查看统计`);
 }
 
-// ========== 自动初始化（不依赖 hooks 机制，模块加载即执行） ==========
-async function _tut_autoInit() {
-    if (state.initialized) return;
-    try {
-        await onActivate();
-    } catch (e) {
-        console.error(`[${MODULE_DISPLAY_NAME}] 自动初始化失败:`, e);
-        state.initialized = false; // 允许重试
-    }
-}
 
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', _tut_autoInit);
-} else {
-    _tut_autoInit();
-}

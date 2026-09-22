@@ -101,7 +101,7 @@ tavern-usage-tracker/
 - **设备识别**：User Agent 匹配移动端特征 + 触屏 + 屏幕宽度
 - **字数统计**：监听发送按钮点击 + Enter 键 + MESSAGE_SENT 事件
 - **悬浮按钮**：圆形设计，pointer 事件统一处理拖动和点击
-- **数据持久化**：使用 SillyTavern 官方 `extensionSettings` API，自动保存到服务器
+- **数据持久化**：使用 SillyTavern 官方 `extensionSettings` API，每次读写都获取最新上下文，设置可靠保存到服务器
 
 ## 📝 许可证
 
