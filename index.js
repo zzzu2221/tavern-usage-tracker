@@ -830,7 +830,10 @@ export async function onActivate() {
     startTimers();
 
     ensureTodayRecord();
-    saveSettings();
+    // 注意：初始化时不要主动 saveSettings()！
+    // 因为 onActivate 调用时机很早，此时酒馆可能还没从磁盘加载完设置，
+    // 主动保存会把默认值（enabled: true）写回磁盘，覆盖用户的设置。
+    // 数据持久化交给定时保存（30秒一次）和用户修改设置时触发。
 
     // 应用就绪后创建悬浮按钮和设置面板
     const setupUI = () => {
